@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+import audioop
+import json
+import base64
 from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Annotated, Generator, Literal, OrderedDict
@@ -265,35 +268,45 @@ def transcribe_file(
 async def audio_receiver(ws: WebSocket, audio_stream: AudioStream) -> None:
     try:
         while True:
-            bytes_ = await asyncio.wait_for(
-                ws.receive_bytes(), timeout=config.max_no_data_seconds
+            message = await asyncio.wait_for(
+                ws.receive_text(), timeout=config.max_no_data_seconds
             )
-            logger.debug(f"Received {len(bytes_)} bytes of audio data")
-            audio_samples = audio_samples_from_file(BytesIO(bytes_))
-            audio_stream.extend(audio_samples)
-            if audio_stream.duration - config.inactivity_window_seconds >= 0:
-                audio = audio_stream.after(
-                    audio_stream.duration - config.inactivity_window_seconds
-                )
-                vad_opts = VadOptions(min_silence_duration_ms=500, speech_pad_ms=0)
-                # NOTE: This is a synchronous operation that runs every time new data is received.
-                # This shouldn't be an issue unless data is being received in tiny chunks or the user's machine is a potato.
-                timestamps = get_speech_timestamps(audio.data, vad_opts)
-                if len(timestamps) == 0:
-                    logger.info(
-                        f"No speech detected in the last {config.inactivity_window_seconds} seconds."
+            data = json.loads(message)
+            if data['event'] == "connected":
+                logger.debug("Connected Message received: {}".format(data))
+            if data['event'] == "start":
+                logger.debug("Start Message received: {}".format(data))
+            if data['event'] == "media":
+                payload = data['media']['payload']
+                logger.debug(f"Received {len(payload)} bytes of audio data")
+                audio_chunk = base64.b64decode(payload)
+                audio_chunk = audioop.ulaw2lin(audio_chunk, 2)
+                audio_chunk = audioop.ratecv(audio_chunk, 2, 1, 8000, 16000, None)[0]
+                audio_samples = audio_samples_from_file(BytesIO(audio_chunk))
+                audio_stream.extend(audio_samples)
+                if audio_stream.duration - config.inactivity_window_seconds >= 0:
+                    audio = audio_stream.after(
+                        audio_stream.duration - config.inactivity_window_seconds
                     )
-                    break
-                elif (
-                    # last speech end time
-                    config.inactivity_window_seconds
-                    - timestamps[-1]["end"] / SAMPLES_PER_SECOND
-                    >= config.max_inactivity_seconds
-                ):
-                    logger.info(
-                        f"Not enough speech in the last {config.inactivity_window_seconds} seconds."
-                    )
-                    break
+                    vad_opts = VadOptions(min_silence_duration_ms=500, speech_pad_ms=0)
+                    # NOTE: This is a synchronous operation that runs every time new data is received.
+                    # This shouldn't be an issue unless data is being received in tiny chunks or the user's machine is a potato.
+                    timestamps = get_speech_timestamps(audio.data, vad_opts)
+                    if len(timestamps) == 0:
+                        logger.info(
+                            f"No speech detected in the last {config.inactivity_window_seconds} seconds."
+                        )
+                        break
+                    elif (
+                        # last speech end time
+                        config.inactivity_window_seconds
+                        - timestamps[-1]["end"] / SAMPLES_PER_SECOND
+                        >= config.max_inactivity_seconds
+                    ):
+                        logger.info(
+                            f"Not enough speech in the last {config.inactivity_window_seconds} seconds."
+                        )
+                        break
     except asyncio.TimeoutError:
         logger.info(
             f"No data received in {config.max_no_data_seconds} seconds. Closing the connection."

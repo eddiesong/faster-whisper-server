@@ -190,7 +190,7 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="_")
 
     log_level: str = "info"
-    default_language: Language | None = None
+    default_language: Language | None = Language.EN
     default_response_format: ResponseFormat = ResponseFormat.JSON
     whisper: WhisperConfig = WhisperConfig()
     max_models: int = 1
@@ -202,7 +202,7 @@ class Config(BaseSettings):
     word_timestamp_error_margin: float = 0.2
     max_inactivity_seconds: float = 5.0
     """
-    Max allowed audio duration without any speech being detected before transcription is finilized and connection is closed.
+    Max allowed audio duration without any speech being detected before transcription is finalized and connection is closed.
     """
     inactivity_window_seconds: float = 10.0
     """
